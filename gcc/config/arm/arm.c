@@ -4204,8 +4204,8 @@ static inline bool reg_needs_saving_p (unsigned reg)
 
   if (IS_INTERRUPT (func_type))
     if (df_regs_ever_live_p (reg)
-	/* Save call-clobbered core registers.  */
-	|| (! crtl->is_leaf && call_used_or_fixed_reg_p (reg) && reg < FIRST_VFP_REGNUM))
+	/* Save call-clobbered registers.  */
+	|| (! crtl->is_leaf && call_used_or_fixed_reg_p (reg)))
       return true;
     else
       return false;
