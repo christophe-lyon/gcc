@@ -28448,9 +28448,110 @@ arm_thumb1_mi_thunk (FILE *file, tree, HOST_WIDE_INT delta,
     {
       if (mi_delta > 255)
 	{
-	  fputs ("\tldr\tr3, ", file);
-	  assemble_name (file, label);
-	  fputs ("+4\n", file);
+	  /* With -mpure-code, we cannot load MI_DELTA from the
+	     constant pool: we build it explicitly.  */
+	  if (target_pure_code)
+	    {
+	      bool mov_done_p = false;
+	      int i;
+
+
+	      /* In the general case, we need 7 instructions to build
+		 a 32 bits constant (1 movs, 3 lsls, 3 adds). We can
+		 do better if MI_DELTA is small enough, or
+		 right-shiftable by a suitable amount.  If the
+		 right-shift enables to encode at least one less byte,
+		 it's worth it: we save a movs and a lsls at the
+		 expense of a final lsls.  */
+	      int final_shift = number_of_first_bit_set (mi_delta);
+
+	      int leading_zeroes = clz_hwi (mi_delta);
+	      int number_of_bytes_needed =
+		((HOST_BITS_PER_WIDE_INT - 1 - leading_zeroes)
+		 / BITS_PER_UNIT) + 1;
+	      int number_of_bytes_needed2 =
+		((HOST_BITS_PER_WIDE_INT - 1 - leading_zeroes - final_shift)
+		 / BITS_PER_UNIT) + 1;
+
+	      if (number_of_bytes_needed2 < number_of_bytes_needed)
+		  mi_delta >>= final_shift;
+	      else
+		final_shift = 0;
+
+	      if (mi_delta <= 510)
+		{
+		  /* It's possible that MI_DELTA is now <= 255, if we
+		     left-shifted it.  */
+		  if (mi_delta > 255)
+		    {
+		      int high = mi_delta - 255;
+
+		      asm_fprintf (file, "\tmovs\tr3, #%d\n", high);
+		      asm_fprintf (file, "\tadds\tr3, #%d\n", 255);
+		    }
+		  else
+		    asm_fprintf (file, "\tmovs\tr3, #%d\n", mi_delta);
+
+		  if (final_shift > 0)
+		    asm_fprintf (file, "\tlsls\tr3, #%d\n", final_shift);
+		}
+	      else
+		{
+		  /* Emit upper 3 bytes if needed.  */
+		  for (i = 0; i < 3; i++)
+		    {
+		      int byte = (mi_delta >> (8 * (3 - i))) & 0xff;
+
+		      if (byte)
+			{
+			  /* Left-shift only if we have already
+			     emitted some upper bits.  */
+			  if (mov_done_p)
+			    asm_fprintf (file, "\tlsls\tr3, #%d\n", shift);
+
+			  if (mov_done_p)
+			    asm_fprintf (file, "\tadds\tr3, #%d\n", byte);
+			  else
+			    asm_fprintf (file, "\tmovs\tr3, #%d\n", byte);
+
+			  /* Stop accumulating shift amount since
+			     we've just emitted some bits.  */
+			  shift = 0;
+
+			  mov_done_p = true;
+			}
+
+		      if (mov_done_p)
+			shift += 8;
+		    }
+
+		  if (mi_delta & 0xff)
+		    {
+		      /* Emit lower byte if needed.  */
+		      if (!mov_done_p)
+			asm_fprintf (file, "\tmovs\tr3, #%d\n", mi_delta & 0xff);
+		      else
+			{
+			  asm_fprintf (file, "\tlsls\tr3, #%d\n", shift);
+			  asm_fprintf (file, "\tadds\tr3, #%d\n", mi_delta & 0xff);
+			}
+
+		      if (final_shift > 0)
+			asm_fprintf (file, "\tlsls\tr3, #%d\n", final_shift);
+		    }
+		  else
+		    {
+		      if (mov_done_p && (shift + final_shift> 0))
+			asm_fprintf (file, "\tlsls\tr3, #%d\n", shift + final_shift);
+		    }
+		}
+	    }
+	  else
+	    {
+	      fputs ("\tldr\tr3, ", file);
+	      assemble_name (file, label);
+	      fputs ("+4\n", file);
+	    }
 	  asm_fprintf (file, "\t%ss\t%r, %r, r3\n",
 		       mi_op, this_regno, this_regno);
 	}
@@ -28486,30 +28587,37 @@ arm_thumb1_mi_thunk (FILE *file, tree, HOST_WIDE_INT delta,
 	fputs ("\tpop\t{r3}\n", file);
 
       fprintf (file, "\tbx\tr12\n");
-      ASM_OUTPUT_ALIGN (file, 2);
-      assemble_name (file, label);
-      fputs (":\n", file);
-      if (flag_pic)
-	{
-	  /* Output ".word .LTHUNKn-[3,7]-.LTHUNKPCn".  */
-	  rtx tem = XEXP (DECL_RTL (function), 0);
-	  /* For TARGET_THUMB1_ONLY the thunk is in Thumb mode, so the PC
-	     pipeline offset is four rather than eight.  Adjust the offset
-	     accordingly.  */
-	  tem = plus_constant (GET_MODE (tem), tem,
-			       TARGET_THUMB1_ONLY ? -3 : -7);
-	  tem = gen_rtx_MINUS (GET_MODE (tem),
-			       tem,
-			       gen_rtx_SYMBOL_REF (Pmode,
-						   ggc_strdup (labelpc)));
-	  assemble_integer (tem, 4, BITS_PER_WORD, 1);
-	}
-      else
-	/* Output ".word .LTHUNKn".  */
-	assemble_integer (XEXP (DECL_RTL (function), 0), 4, BITS_PER_WORD, 1);
 
-      if (TARGET_THUMB1_ONLY && mi_delta > 255)
-	assemble_integer (GEN_INT(mi_delta), 4, BITS_PER_WORD, 1);
+      /* With -mpure-code, we don't need to emit literals for the
+	 function address and delta since we emitted code to build
+	 them.  */
+      if (!target_pure_code)
+	{
+	  ASM_OUTPUT_ALIGN (file, 2);
+	  assemble_name (file, label);
+	  fputs (":\n", file);
+	  if (flag_pic)
+	    {
+	      /* Output ".word .LTHUNKn-[3,7]-.LTHUNKPCn".  */
+	      rtx tem = XEXP (DECL_RTL (function), 0);
+	      /* For TARGET_THUMB1_ONLY the thunk is in Thumb mode, so the PC
+		 pipeline offset is four rather than eight.  Adjust the offset
+		 accordingly.  */
+	      tem = plus_constant (GET_MODE (tem), tem,
+				   TARGET_THUMB1_ONLY ? -3 : -7);
+	      tem = gen_rtx_MINUS (GET_MODE (tem),
+				   tem,
+				   gen_rtx_SYMBOL_REF (Pmode,
+						       ggc_strdup (labelpc)));
+	      assemble_integer (tem, 4, BITS_PER_WORD, 1);
+	    }
+	  else
+	    /* Output ".word .LTHUNKn".  */
+	    assemble_integer (XEXP (DECL_RTL (function), 0), 4, BITS_PER_WORD, 1);
+
+	  if (TARGET_THUMB1_ONLY && mi_delta > 255)
+	    assemble_integer (GEN_INT(mi_delta), 4, BITS_PER_WORD, 1);
+	}
     }
   else
     {
