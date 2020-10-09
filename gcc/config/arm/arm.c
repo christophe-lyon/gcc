@@ -4513,38 +4513,6 @@ const_ok_for_dimode_op (HOST_WIDE_INT i, enum rtx_code code)
     }
 }
 
-/* Emit a sequence of movs/adds/shift to produce a 32-bit constant.
-   Avoid generating useless code when one of the bytes is zero.  */
-void
-thumb1_gen_const_int (rtx op0, HOST_WIDE_INT op1)
-{
-  bool mov_done_p = false;
-  int i;
-
-  /* Emit upper 3 bytes if needed.  */
-  for (i = 0; i < 3; i++)
-    {
-      int byte = (op1 >> (8 * (3 - i))) & 0xff;
-
-      if (byte)
-	{
-	  emit_set_insn (op0, mov_done_p
-			 ? gen_rtx_PLUS (SImode,op0, GEN_INT (byte))
-			 : GEN_INT (byte));
-	  mov_done_p = true;
-	}
-
-      if (mov_done_p)
-	emit_set_insn (op0, gen_rtx_ASHIFT (SImode, op0, GEN_INT (8)));
-    }
-
-  /* Emit lower byte if needed.  */
-  if (!mov_done_p)
-    emit_set_insn (op0, GEN_INT (op1 & 0xff));
-  else if (op1 & 0xff)
-    emit_set_insn (op0, gen_rtx_PLUS (SImode, op0, GEN_INT (op1 & 0xff)));
-}
-
 /* Emit a sequence of insns to handle a large constant.
    CODE is the code of the operation required, it can be any of SET, PLUS,
    IOR, AND, XOR, MINUS;
@@ -28249,7 +28217,7 @@ arm_internal_label (FILE *stream, const char *prefix, unsigned long labelno)
    OP0 is NULL, use REGNO as output register, use REGNO(OP0)
    otherwise.  */
 void
-thumb1_emit_const_int (FILE *file, int regno, rtx op0, HOST_WIDE_INT op1)
+thumb1_gen_const_int (FILE *file, int regno, rtx op0, HOST_WIDE_INT op1)
 {
   bool mov_done_p = false;
   int val = op1;
