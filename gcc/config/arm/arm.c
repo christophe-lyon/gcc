@@ -28278,6 +28278,8 @@ thumb1_emit_const_int (FILE *file, int regno, rtx op0, HOST_WIDE_INT op1)
   else
     final_shift = 0;
 
+  /* If we are in a very small range, we can use either a single movs
+     or movs+adds.  */
   if ((val >= 0) && (val <= 510))
     {
       /* It's possible that VAL is now <= 255, if we
@@ -28286,36 +28288,70 @@ thumb1_emit_const_int (FILE *file, int regno, rtx op0, HOST_WIDE_INT op1)
 	{
 	  int high = val - 255;
 
-	  asm_fprintf (file, "\tmovs\tr%d, #%d\n", regno, high);
-	  asm_fprintf (file, "\tadds\tr%d, #%d\n", regno, 255);
+	  if (op0)
+	    {
+	      emit_set_insn (op0, GEN_INT (high));
+	      emit_set_insn (op0, gen_rtx_PLUS (SImode, op0, GEN_INT (255)));
+	    }
+	  else
+	    {
+	      asm_fprintf (file, "\tmovs\tr%d, #%d\n", regno, high);
+	      asm_fprintf (file, "\tadds\tr%d, #%d\n", regno, 255);
+	    }
 	}
       else
-	asm_fprintf (file, "\tmovs\tr%d, #%d\n", regno, val);
+	{
+	  if (op0)
+	    emit_set_insn (op0, GEN_INT (val));
+	  else
+	    asm_fprintf (file, "\tmovs\tr%d, #%d\n", regno, val);
+	}
 
       if (final_shift > 0)
-	asm_fprintf (file, "\tlsls\tr%d, #%d\n", regno, final_shift);
+	{
+	  if (op0)
+	    emit_set_insn (op0, gen_rtx_ASHIFT (SImode, op0, GEN_INT (final_shift)));
+	  else
+	    asm_fprintf (file, "\tlsls\tr%d, #%d\n", regno, final_shift);
+	}
     }
   else
     {
-      /* Emit upper 3 bytes if needed.  */
+      /* General case, emit upper 3 bytes as needed.  */
       for (i = 0; i < 3; i++)
 	{
 	  int byte = (val >> (8 * (3 - i))) & 0xff;
 
 	  if (byte)
 	    {
-	      /* Left-shift only if we have already
+	      /* We are about to emit new bits, stop accumulating a
+		 shift amount, and left-shift only if we have already
 		 emitted some upper bits.  */
 	      if (mov_done_p)
-		asm_fprintf (file, "\tlsls\tr%d, #%d\n", regno, shift);
+		{
+		  if (op0)
+		    emit_set_insn (op0, gen_rtx_ASHIFT (SImode, op0, GEN_INT (shift)));
+		  else
+		    asm_fprintf (file, "\tlsls\tr%d, #%d\n", regno, shift);
+		}
 
 	      if (mov_done_p)
-		asm_fprintf (file, "\tadds\tr%d, #%d\n", regno, byte);
+		{
+		  if (op0)
+		    emit_set_insn (op0, gen_rtx_PLUS (SImode, op0, GEN_INT (byte)));
+		  else
+		    asm_fprintf (file, "\tadds\tr%d, #%d\n", regno, byte);
+		}
 	      else
-		asm_fprintf (file, "\tmovs\tr%d, #%d\n", regno, byte);
+		{
+		  if (op0)
+		    emit_set_insn (op0, GEN_INT (byte));
+		  else
+		    asm_fprintf (file, "\tmovs\tr%d, #%d\n", regno, byte);
+		}
 
-	      /* Stop accumulating shift amount since
-		 we've just emitted some bits.  */
+	      /* Stop accumulating shift amount since we've just
+		 emitted some bits.  */
 	      shift = 0;
 
 	      mov_done_p = true;
@@ -28325,24 +28361,34 @@ thumb1_emit_const_int (FILE *file, int regno, rtx op0, HOST_WIDE_INT op1)
 	    shift += 8;
 	}
 
-      if (val & 0xff)
+      /* Emit lower byte; it's not zero because we handled that case above.  */
+      if (!mov_done_p)
 	{
-	  /* Emit lower byte if needed.  */
-	  if (!mov_done_p)
+	  if (op0)
+	    emit_set_insn (op0, GEN_INT (val & 0xff));
+	  else
 	    asm_fprintf (file, "\tmovs\tr%d, #%d\n", regno, val & 0xff);
+	}
+      else
+	{
+	  if (op0)
+	    {
+	      emit_set_insn (op0, gen_rtx_ASHIFT (SImode, op0, GEN_INT (shift)));
+	      emit_set_insn (op0, gen_rtx_PLUS (SImode, op0, GEN_INT (val & 0xff)));
+	    }
 	  else
 	    {
 	      asm_fprintf (file, "\tlsls\tr%d, #%d\n", regno, shift);
 	      asm_fprintf (file, "\tadds\tr%d, #%d\n", regno, val & 0xff);
 	    }
-
-	  if (final_shift > 0)
-	    asm_fprintf (file, "\tlsls\tr%d, #%d\n", regno, final_shift);
 	}
-      else
+
+      if (final_shift > 0)
 	{
-	  if (mov_done_p && (shift + final_shift> 0))
-	    asm_fprintf (file, "\tlsls\tr%d, #%d\n", regno, shift + final_shift);
+	  if (op0)
+	    emit_set_insn (op0, gen_rtx_ASHIFT (SImode, op0, GEN_INT (final_shift)));
+	  else
+	    asm_fprintf (file, "\tlsls\tr%d, #%d\n", regno, final_shift);
 	}
     }
 }
