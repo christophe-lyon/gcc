@@ -28244,6 +28244,109 @@ arm_internal_label (FILE *stream, const char *prefix, unsigned long labelno)
   default_internal_label (stream, prefix, labelno);
 }
 
+/* Emit a sequence of movs/adds/shift to produce a 32-bit constant.
+   Avoid generating useless code when one of the bytes is zero.  If
+   OP0 is NULL, use REGNO as output register, use REGNO(OP0)
+   otherwise.  */
+void
+thumb1_emit_const_int (FILE *file, int regno, rtx op0, HOST_WIDE_INT op1)
+{
+  bool mov_done_p = false;
+  int val = op1;
+  int shift = 0;
+  int i;
+
+  /* In the general case, we need 7 instructions to build
+     a 32 bits constant (1 movs, 3 lsls, 3 adds). We can
+     do better if VAL is small enough, or
+     right-shiftable by a suitable amount.  If the
+     right-shift enables to encode at least one less byte,
+     it's worth it: we save a movs and a lsls at the
+     expense of a final lsls.  */
+  int final_shift = number_of_first_bit_set (val);
+
+  int leading_zeroes = clz_hwi (val);
+  int number_of_bytes_needed =
+    ((HOST_BITS_PER_WIDE_INT - 1 - leading_zeroes)
+     / BITS_PER_UNIT) + 1;
+  int number_of_bytes_needed2 =
+    ((HOST_BITS_PER_WIDE_INT - 1 - leading_zeroes - final_shift)
+     / BITS_PER_UNIT) + 1;
+
+  if (number_of_bytes_needed2 < number_of_bytes_needed)
+    val >>= final_shift;
+  else
+    final_shift = 0;
+
+  if ((val >= 0) && (val <= 510))
+    {
+      /* It's possible that VAL is now <= 255, if we
+	 left-shifted it.  */
+      if (val > 255)
+	{
+	  int high = val - 255;
+
+	  asm_fprintf (file, "\tmovs\tr%d, #%d\n", regno, high);
+	  asm_fprintf (file, "\tadds\tr%d, #%d\n", regno, 255);
+	}
+      else
+	asm_fprintf (file, "\tmovs\tr%d, #%d\n", regno, val);
+
+      if (final_shift > 0)
+	asm_fprintf (file, "\tlsls\tr%d, #%d\n", regno, final_shift);
+    }
+  else
+    {
+      /* Emit upper 3 bytes if needed.  */
+      for (i = 0; i < 3; i++)
+	{
+	  int byte = (val >> (8 * (3 - i))) & 0xff;
+
+	  if (byte)
+	    {
+	      /* Left-shift only if we have already
+		 emitted some upper bits.  */
+	      if (mov_done_p)
+		asm_fprintf (file, "\tlsls\tr%d, #%d\n", regno, shift);
+
+	      if (mov_done_p)
+		asm_fprintf (file, "\tadds\tr%d, #%d\n", regno, byte);
+	      else
+		asm_fprintf (file, "\tmovs\tr%d, #%d\n", regno, byte);
+
+	      /* Stop accumulating shift amount since
+		 we've just emitted some bits.  */
+	      shift = 0;
+
+	      mov_done_p = true;
+	    }
+
+	  if (mov_done_p)
+	    shift += 8;
+	}
+
+      if (val & 0xff)
+	{
+	  /* Emit lower byte if needed.  */
+	  if (!mov_done_p)
+	    asm_fprintf (file, "\tmovs\tr%d, #%d\n", regno, val & 0xff);
+	  else
+	    {
+	      asm_fprintf (file, "\tlsls\tr%d, #%d\n", regno, shift);
+	      asm_fprintf (file, "\tadds\tr%d, #%d\n", regno, val & 0xff);
+	    }
+
+	  if (final_shift > 0)
+	    asm_fprintf (file, "\tlsls\tr%d, #%d\n", regno, final_shift);
+	}
+      else
+	{
+	  if (mov_done_p && (shift + final_shift> 0))
+	    asm_fprintf (file, "\tlsls\tr%d, #%d\n", regno, shift + final_shift);
+	}
+    }
+}
+
 /* Output code to add DELTA to the first argument, and then jump
    to FUNCTION.  Used for C++ multiple inheritance.  */
 
