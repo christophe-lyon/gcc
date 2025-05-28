@@ -6,7 +6,7 @@ name: CI
 on:
   # Triggers the workflow on push or pull request events but only for the "master" branch
   push:
-    branches: [ "master" ]
+    #branches: [ "master" ]     # XXXXX  try all branches
   pull_request:
     branches: [ "master" ]
 
@@ -34,3 +34,14 @@ jobs:
         run: |
           echo Add other actions to build,
           echo test, and deploy your project.
+
+      # Actual testing on what actions can do
+      - name: My tests
+        run: |
+          echo "My basic tests"
+          echo "Actor: ${{ github.actor }}"
+          echo "Event: ${{ github.event_name }}"
+          echo "Branch: ${{ github.ref }}"
+          echo "Repo: ${{ github.repository }}"
+          echo "Workspace: ${{ github.workspace }}"
+          echo "Status: ${{ github.status }}"
